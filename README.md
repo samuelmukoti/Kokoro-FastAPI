@@ -9,9 +9,10 @@
 
 Dockerized FastAPI wrapper for [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) text-to-speech model
 - OpenAI-compatible Speech endpoint, with inline voice combination functionality
-- NVIDIA GPU accelerated or CPU Onnx inference 
+- NVIDIA GPU accelerated, Apple Silicon MPS, or CPU Onnx inference 
 - very fast generation time
   - 35x-100x+ real time speed via 4060Ti+
+  - 15x+ real time speed via M3 Pro MPS
   - 5x+ real time speed via M3 Pro CPU
 - streaming support w/ variable chunking to control latency & artifacts
 - phoneme, simple audio generation web ui utility
@@ -32,6 +33,7 @@ Dockerized FastAPI wrapper for [Kokoro-82M](https://huggingface.co/hexgrad/Kokor
         <pre> # with:
 docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest # CPU
 docker run --gpus all -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-gpu:latest # Nvidia GPU
+docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-apple:latest # Apple Silicon
         </pre>
       </ul>
     </td>
@@ -53,8 +55,11 @@ The service can be accessed through either the API endpoints or the Gradio web i
         #   * Switch to stable branch if any issues *
         git checkout v0.0.5post1-stable
 
-        cd docker/gpu # OR 
-        # cd docker/cpu # Run this or the above
+        # Choose one of:
+        cd docker/gpu    # For NVIDIA GPU
+        cd docker/cpu    # For CPU only
+        cd docker/apple  # For Apple Silicon (M1/M2/M3)
+        
         docker compose up --build 
         ```
         
@@ -65,8 +70,10 @@ The service can be accessed through either the API endpoints or the Gradio web i
   __Or__ running the API alone using Docker (model + voice packs baked in) (Most Recent):
           
   ```bash
+  # Choose one:
   docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.1.0post1 # CPU 
   docker run --gpus all -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-gpu:v0.1.0post1 # Nvidia GPU
+  docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-apple:v0.1.0post1 # Apple Silicon
   ```
         
         
@@ -385,6 +392,169 @@ with open("speech.wav", "wb") as f:
 See `examples/phoneme_examples/generate_phonemes.py` for a sample script.
 </details>
 
+## API Usage Guide
+
+<details>
+<summary>OpenAI-Compatible API Configuration</summary>
+
+FastKoko provides a drop-in replacement for OpenAI's text-to-speech API. Here's how to configure your application:
+
+### Python
+```python
+from openai import OpenAI
+
+# Configure the client to use FastKoko
+client = OpenAI(
+    base_url="http://localhost:8880/v1",  # FastKoko API endpoint
+    api_key="not-needed"  # API key is not required
+)
+
+# Generate speech
+response = client.audio.speech.create(
+    model="kokoro",  # Model name (required but not used)
+    voice="af_bella",  # Voice ID or combination (e.g., "af_bella+af_sky")
+    input="Hello world!",
+    response_format="mp3"  # Supported: mp3, wav, opus, flac
+)
+
+# Save to file
+response.stream_to_file("output.mp3")
+
+# Or stream directly (requires PyAudio)
+with client.audio.speech.with_streaming_response.create(
+    model="kokoro",
+    voice="af_bella",
+    input="Hello world!",
+    response_format="pcm"  # Use PCM format for streaming
+) as response:
+    for chunk in response.iter_bytes(chunk_size=1024):
+        # Process audio chunks in real-time
+        pass
+```
+
+### JavaScript/TypeScript
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    baseURL: 'http://localhost:8880/v1',
+    apiKey: 'not-needed'
+});
+
+// Generate speech
+async function generateSpeech() {
+    const response = await client.audio.speech.create({
+        model: 'kokoro',
+        voice: 'af_bella',
+        input: 'Hello world!',
+        response_format: 'mp3'
+    });
+
+    // Convert to blob
+    const blob = new Blob([await response.arrayBuffer()], { type: 'audio/mp3' });
+    
+    // Play audio
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.play();
+}
+```
+
+### cURL
+```bash
+# Generate speech
+curl http://localhost:8880/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kokoro",
+    "input": "Hello world!",
+    "voice": "af_bella",
+    "response_format": "mp3"
+  }' \
+  --output output.mp3
+
+# List available voices
+curl http://localhost:8880/v1/audio/voices
+```
+</details>
+
+<details>
+<summary>Voice Combination Examples</summary>
+
+FastKoko supports voice combination for unique voice creation:
+
+```python
+# Using the OpenAI client
+response = client.audio.speech.create(
+    model="kokoro",
+    voice="af_bella+af_sky",  # Combine voices with '+'
+    input="Hello with a combined voice!",
+    response_format="mp3"
+)
+
+# Using direct API calls
+import requests
+
+# Create a combined voice (optional, voices can be combined directly in speech requests)
+response = requests.post(
+    "http://localhost:8880/v1/audio/voices/combine",
+    json=["af_bella", "af_sky"]
+)
+combined_voice = response.json()["voice"]
+
+# Generate speech with combined voice
+response = requests.post(
+    "http://localhost:8880/v1/audio/speech",
+    json={
+        "input": "Hello with a combined voice!",
+        "voice": combined_voice,  # or "af_bella+af_sky"
+        "response_format": "mp3"
+    }
+)
+```
+</details>
+
+<details>
+<summary>Advanced Configuration</summary>
+
+### Environment Variables
+```bash
+# Docker environment variables for fine-tuning:
+DEVICE=mps                           # Use: cpu, cuda, or mps (Apple Silicon)
+PYTORCH_ENABLE_MPS_FALLBACK=1        # Enable MPS fallback for Apple Silicon
+DISABLE_LOCAL_SAVING=true            # Disable saving generated audio files
+```
+
+### Audio Format Options
+```python
+# Available formats and their use cases:
+response = client.audio.speech.create(
+    model="kokoro",
+    voice="af_bella",
+    input="Hello world!",
+    response_format="mp3"    # Best for general use, good compression
+    # response_format="wav"  # Lossless, best quality
+    # response_format="opus" # Best for streaming, low latency
+    # response_format="flac" # Lossless compression
+    # response_format="pcm"  # Raw audio, best for real-time processing
+)
+```
+
+### Performance Optimization
+```python
+# Streaming with chunk size optimization
+with client.audio.speech.with_streaming_response.create(
+    model="kokoro",
+    voice="af_bella",
+    input="Hello world!",
+    response_format="pcm",
+) as response:
+    # Larger chunks = better quality, higher latency
+    # Smaller chunks = lower latency, potential artifacts
+    for chunk in response.iter_bytes(chunk_size=4096):  # Adjust chunk size as needed
+        process_audio_chunk(chunk)
+```
+</details>
+
 ## Known Issues
 
 <details>
@@ -472,3 +642,8 @@ This project is licensed under the Apache License 2.0 - see below for details:
 
 The full Apache 2.0 license text can be found at: https://www.apache.org/licenses/LICENSE-2.0
 </details>
+
+## Contributors
+
+Special thanks to:
+- Samuel Mukoti - Apple Silicon support and optimization

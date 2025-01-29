@@ -1,0 +1,14 @@
+[project]
+name = "kokoro-fastapi-apple"
+version = "0.1.0"
+description = "FastAPI TTS Service - Apple Silicon Version"
+readme = "../README.md"
+requires-python = ">=3.10"
+
+[tool.uv.workspace]
+members = ["../shared"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+explicit = true 
